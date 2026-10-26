@@ -1,3 +1,4 @@
+// Modified by ibis inc. (2026-10-26): measure child menus, avoid parent overlap, and require explicit opening when neither side fits.
 use crate::ThemeStyled as _;
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::actions::{SelectLeft, SelectRight};
@@ -9,12 +10,16 @@ use gpui::{
     Action, Anchor, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Edges, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
     ParentElement, Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement,
-    Styled, WeakEntity, Window, anchored, deferred, div, prelude::FluentBuilder, px, rems,
+    Styled, WeakEntity, Window, anchored, deferred, div, prelude::FluentBuilder, px,
 };
 use gpui::{ClickEvent, Half, MouseDownEvent, OwnedMenuItem, Point, Subscription};
 use gpui_base::TestSupportExt as _;
 
-use std::rc::Rc;
+use super::submenu_placement::{SubmenuPlacement, place_submenu};
+use std::{cell::Cell, rc::Rc};
+
+const SUBMENU_EDGE_MARGIN: f32 = 4.;
+const SUBMENU_GAP: f32 = 4.;
 
 const CONTEXT: &str = "PopupMenu";
 
@@ -308,6 +313,9 @@ pub struct PopupMenu {
     scroll_handle: ScrollHandle,
     // This will update on render
     submenu_anchor: (Anchor, Pixels),
+    submenu_placement: SubmenuPlacement,
+    explicit_submenu_index: Option<usize>,
+    item_bounds: Vec<Rc<Cell<Bounds<Pixels>>>>,
 
     /// Paint priority for this menu layer. The top-level menu starts at 1 and
     /// each nested submenu increments it, so deeper levels are always drawn on
@@ -350,6 +358,9 @@ impl PopupMenu {
             external_link_icon: true,
             size: Size::default(),
             submenu_anchor: (Anchor::TopLeft, Pixels::ZERO),
+            submenu_placement: SubmenuPlacement::default(),
+            explicit_submenu_index: None,
+            item_bounds: Vec::new(),
             priority: gpui_base::POPUP_PRIORITY,
             _subscriptions: vec![],
         }
@@ -759,6 +770,8 @@ impl PopupMenu {
         let mut menu = std::mem::replace(self, Self::new(cx));
         menu.menu_items.clear();
         menu.selected_index = None;
+        menu.explicit_submenu_index = None;
+        menu.item_bounds.clear();
         *self = f(menu, window, cx);
         cx.notify();
     }
@@ -826,6 +839,15 @@ impl PopupMenu {
     }
 
     pub(crate) fn active_submenu(&self) -> Option<Entity<PopupMenu>> {
+        if self.submenu_placement.explicit_only
+            && self.explicit_submenu_index != self.selected_index
+        {
+            return None;
+        }
+        self.selected_submenu()
+    }
+
+    fn selected_submenu(&self) -> Option<Entity<PopupMenu>> {
         if let Some(ix) = self.selected_index {
             if let Some(item) = self.menu_items.get(ix) {
                 return match item {
@@ -882,6 +904,9 @@ impl PopupMenu {
                         }
                         self.dismiss(&Cancel, window, cx)
                     }
+                    Some(PopupMenuItem::Submenu { .. }) => {
+                        self._select_submenu(window, cx);
+                    }
                     _ => {}
                 }
             }
@@ -904,6 +929,7 @@ impl PopupMenu {
 
     fn set_selected_index(&mut self, ix: usize, cx: &mut Context<Self>) {
         if self.selected_index != Some(ix) {
+            self.explicit_submenu_index = None;
             self.selected_index = Some(ix);
             self.scroll_handle.scroll_to_item(ix);
             cx.notify();
@@ -992,6 +1018,7 @@ impl PopupMenu {
     }
 
     fn _select_submenu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.explicit_submenu_index = self.selected_index;
         if let Some(active_submenu) = self.active_submenu() {
             // Focus the submenu, so that can be handle the action.
             active_submenu.update(cx, |view, cx| {
@@ -1009,6 +1036,7 @@ impl PopupMenu {
         if let Some(active_submenu) = self.active_submenu() {
             active_submenu.update(cx, |view, cx| {
                 view.selected_index = None;
+                view.explicit_submenu_index = None;
                 cx.notify();
             });
             return true;
@@ -1026,6 +1054,7 @@ impl PopupMenu {
         };
 
         self.selected_index = None;
+        self.explicit_submenu_index = None;
         parent.update(cx, |view, cx| {
             view.focus_handle.focus(window, cx);
             cx.notify();
@@ -1054,6 +1083,7 @@ impl PopupMenu {
     /// The submenu is closed together with its parent, same as macOS menus.
     fn dismiss(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
         self.selected_index = None;
+        self.explicit_submenu_index = None;
         cx.emit(DismissEvent);
 
         // Focus back to the previous focused handle, unless the item's click
@@ -1177,22 +1207,49 @@ impl PopupMenu {
         self.max_width.unwrap_or(px(500.))
     }
 
-    /// Calculate the anchor corner and left offset for child submenu
-    fn update_submenu_menu_anchor(&mut self, window: &Window) {
-        let bounds = self.bounds;
-        let max_width = self.max_width();
-        let (anchor, left) = if max_width + bounds.origin.x > window.bounds().size.width {
-            (Anchor::TopRight, -px(16.))
-        } else {
-            (Anchor::TopLeft, bounds.size.width - px(8.))
+    /// The parent's and child's actual extents determine placement; the parent menu width is not a proxy for the child width.
+    fn update_submenu_menu_anchor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.selected_submenu() else {
+            self.submenu_placement = SubmenuPlacement::default();
+            return;
         };
-
-        let is_bottom_pos = bounds.origin.y + bounds.size.height > window.bounds().size.height;
-        self.submenu_anchor = if is_bottom_pos {
-            (anchor.other_side_along(gpui::Axis::Vertical), left)
-        } else {
-            (anchor, left)
+        let known_width = {
+            let child = menu.read(cx);
+            match (child.min_width, child.max_width) {
+                (Some(min), Some(max)) if min == max => Some(min),
+                _ if child.bounds.size.width > px(0.) => Some(child.bounds.size.width),
+                _ => None,
+            }
         };
+        let width = known_width.unwrap_or_else(|| {
+            let mut element = menu.clone().into_any_element();
+            element
+                .layout_as_root(
+                    gpui::size(
+                        gpui::AvailableSpace::MinContent,
+                        gpui::AvailableSpace::MinContent,
+                    ),
+                    window,
+                    cx,
+                )
+                .width
+        });
+        self.submenu_placement = place_submenu(
+            self.bounds.left().into(),
+            self.bounds.right().into(),
+            width.into(),
+            window.viewport_size().width.into(),
+            SUBMENU_EDGE_MARGIN,
+            SUBMENU_GAP,
+        );
+        self.submenu_anchor = (
+            if self.submenu_placement.opens_left {
+                Anchor::TopRight
+            } else {
+                Anchor::TopLeft
+            },
+            px(self.submenu_placement.left),
+        );
     }
 
     fn render_item(
@@ -1233,15 +1290,25 @@ impl PopupMenu {
             .selected(selected)
             .on_hover(cx.listener(move |this, hovered, _, cx| {
                 if *hovered {
+                    if this.selected_index != Some(ix) {
+                        this.explicit_submenu_index = None;
+                    }
                     this.selected_index = Some(ix);
                 } else if !is_submenu && this.selected_index == Some(ix) {
                     // TODO: Better handle the submenu unselection when hover out
                     this.selected_index = None;
+                    this.explicit_submenu_index = None;
                 }
 
                 cx.notify();
             }))
-            .when_some(item.a11y_label(), |this, label| this.aria_label(label));
+            .when_some(item.a11y_label(), |this, label| this.aria_label(label))
+            .child({
+                let measured = self.item_bounds[ix].clone();
+                gpui::canvas(|_, _, _| (), move |bounds, _, _, _| measured.set(bounds))
+                    .absolute()
+                    .inset_0()
+            });
 
         match item {
             PopupMenuItem::Separator => this
@@ -1348,6 +1415,7 @@ impl PopupMenu {
             } => this
                 .selected(selected)
                 .disabled(*disabled)
+                .on_click(cx.listener(move |this, _, window, cx| this.on_click(ix, window, cx)))
                 .items_start()
                 .child(
                     h_flex()
@@ -1376,29 +1444,31 @@ impl PopupMenu {
                                 ),
                         ),
                 )
-                .when(selected, |this| {
-                    this.child({
-                        let (anchor, left) = self.submenu_anchor;
-                        let is_bottom_pos =
-                            matches!(anchor, Anchor::BottomLeft | Anchor::BottomRight);
-                        deferred(
-                            anchored()
-                                .anchor(anchor)
-                                .child(
-                                    div()
-                                        .id("submenu")
-                                        .test_support()
-                                        .occlude()
-                                        .when(is_bottom_pos, |this| this.bottom_0())
-                                        .when(!is_bottom_pos, |this| this.top_neg_1())
-                                        .left(left)
-                                        .child(menu.clone()),
-                                )
-                                .snap_to_window_with_margin(Edges::all(EDGE_PADDING)),
-                        )
-                        .with_priority(self.priority + 1)
-                    })
-                }),
+                .when(
+                    selected
+                        && (!self.submenu_placement.explicit_only
+                            || self.explicit_submenu_index == Some(ix)),
+                    |this| {
+                        this.child({
+                            let row = self.item_bounds[ix].get();
+                            let position =
+                                gpui::point(px(self.submenu_placement.left), row.origin.y);
+                            deferred(
+                                anchored()
+                                    .position(position)
+                                    .child(
+                                        div()
+                                            .id("submenu")
+                                            .test_support()
+                                            .occlude()
+                                            .child(menu.clone()),
+                                    )
+                                    .snap_to_window_with_margin(Edges::all(EDGE_PADDING)),
+                            )
+                            .with_priority(self.priority + 1)
+                        })
+                    },
+                ),
         }
     }
 }
@@ -1420,7 +1490,10 @@ struct RenderOptions {
 
 impl Render for PopupMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.update_submenu_menu_anchor(window);
+        while self.item_bounds.len() < self.menu_items.len() {
+            self.item_bounds.push(Rc::new(Cell::new(Bounds::default())));
+        }
+        self.update_submenu_menu_anchor(window, cx);
 
         // Submenus attached via the public `item()` + `PopupMenuItem::submenu()`
         // path (from contexts that only have the menu value, e.g. a table
@@ -1453,7 +1526,10 @@ impl Render for PopupMenu {
             .iter()
             .any(|item| item.has_left_icon(self.check_side));
 
-        let max_width = self.max_width();
+        let viewport_width =
+            (window.viewport_size().width - px(2. * SUBMENU_EDGE_MARGIN)).max(px(0.));
+        let max_width = self.max_width().min(viewport_width);
+        let default_min_width = (window.rem_size() * 8.).min(max_width);
         let options = RenderOptions {
             has_left_icon,
             check_side: self.check_side,
@@ -1482,8 +1558,10 @@ impl Render for PopupMenu {
                     .id("items")
                     .p_1()
                     .gap_y_0p5()
-                    .min_w(rems(8.))
-                    .when_some(self.min_width, |this, min_width| this.min_w(min_width))
+                    .min_w(default_min_width)
+                    .when_some(self.min_width, |this, min_width| {
+                        this.min_w(min_width.min(max_width))
+                    })
                     .max_w(max_width)
                     .when(self.scrollable, |this| {
                         this.max_h(max_height)
@@ -1529,5 +1607,110 @@ mod tests {
         );
         assert_eq!(PopupMenuItem::separator().a11y_label(), None);
         assert_eq!(PopupMenuItem::element(|_, _| div()).a11y_label(), None);
+    }
+
+    struct CascadeHarness {
+        menu: Entity<PopupMenu>,
+        position: Point<Pixels>,
+        _dismiss: Subscription,
+    }
+    impl Render for CascadeHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(anchored().position(self.position).child(self.menu.clone()))
+        }
+    }
+
+    #[gpui::test]
+    fn cascading_menus_avoid_parent_and_require_explicit_open_when_narrow(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(crate::init);
+        for case in 0..3 {
+            let invoked = Rc::new(Cell::new(0usize));
+            let dismissed = Rc::new(Cell::new(0usize));
+            let (root, visual) = cx.add_window_view({
+                let invoked = invoked.clone();
+                let dismissed = dismissed.clone();
+                move |window, cx| {
+                    let viewport = f32::from(window.viewport_size().width);
+                    let (left, parent_width, child_width) = match case {
+                        0 => (20., viewport * 0.2, viewport * 0.2),
+                        1 => (viewport * 0.75, viewport * 0.2, viewport * 0.3),
+                        _ => (viewport * 0.25, viewport * 0.4, viewport * 0.6),
+                    };
+                    let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
+                        let invoked = invoked.clone();
+                        menu.min_w(px(parent_width))
+                            .max_w(px(parent_width))
+                            .submenu("More", window, cx, move |child, _, _| {
+                                let invoked = invoked.clone();
+                                child.min_w(px(child_width)).max_w(px(child_width)).item(
+                                    PopupMenuItem::new("Execute")
+                                        .on_click(move |_, _, _| invoked.set(invoked.get() + 1)),
+                                )
+                            })
+                    });
+                    menu.focus_handle(cx).focus(window, cx);
+                    let _dismiss = cx.subscribe(&menu, move |_, _, _: &DismissEvent, _| {
+                        dismissed.set(dismissed.get() + 1)
+                    });
+                    CascadeHarness {
+                        menu,
+                        position: gpui::point(px(left), px(40.)),
+                        _dismiss,
+                    }
+                }
+            });
+            visual.update(|window, cx| window.draw(cx).clear(cx));
+            let parent = root.read_with(visual, |root, _| root.menu.clone());
+            let row = parent.read_with(visual, |menu, _| menu.item_bounds[0].get());
+            visual.simulate_mouse_move(row.center(), None, Default::default());
+            visual.update(|window, cx| window.draw(cx).clear(cx));
+            let opened = parent.read_with(visual, |menu, _| menu.active_submenu());
+            if case == 2 {
+                assert!(
+                    opened.is_none(),
+                    "hover must not cover the parent when neither side fits"
+                );
+                visual.simulate_click(row.center(), Default::default());
+                visual.update(|window, cx| window.draw(cx).clear(cx));
+            }
+            let child = parent
+                .read_with(visual, |menu, _| menu.active_submenu())
+                .expect("submenu opens");
+            let (parent_bounds, child_bounds, viewport) = visual.update(|window, cx| {
+                (
+                    parent.read(cx).bounds,
+                    child.read(cx).bounds,
+                    window.viewport_size().width,
+                )
+            });
+            assert!(child_bounds.left() >= px(0.) && child_bounds.right() <= viewport);
+            match case {
+                0 => assert!(child_bounds.left() >= parent_bounds.right()),
+                1 => assert!(child_bounds.right() <= parent_bounds.left()),
+                _ => assert!(
+                    parent.read_with(visual, |menu, _| menu.submenu_placement.explicit_only)
+                ),
+            }
+            // Explicit navigation still focuses the child; Enter executes the leaf and dismisses the parent chain.
+            if case != 2 {
+                visual.update(|window, cx| {
+                    parent.update(cx, |menu, cx| {
+                        menu._select_submenu(window, cx);
+                    })
+                });
+            }
+            visual.simulate_keystrokes("enter");
+            visual.run_until_parked();
+            assert_eq!(invoked.get(), 1, "keyboard confirm executes the child item");
+            assert_eq!(
+                dismissed.get(),
+                1,
+                "child confirmation dismisses the parent menu"
+            );
+        }
     }
 }

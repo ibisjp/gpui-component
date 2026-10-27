@@ -7,7 +7,8 @@ This is an independent fork of the published `gpui-component` 0.6.6 crate. Its s
 - Distribution: https://crates.io/api/v1/crates/gpui-component/0.6.6/download
 - License: Apache-2.0. Original copyright/license notice is retained in `LICENSE-APACHE`; the full Apache 2.0 text is included in `LICENSE-2.0` (https://www.apache.org/licenses/LICENSE-2.0.txt).
 - Local baseline was imported unchanged from Cargo's cached published crate. The upstream repository's raw LICENSE URL at the recorded revision returned 404 at the time of this work; its availability was not assumed.
-- No remote has been configured or pushed.
+- ibisOffice fork repository: https://ibis-dev.backlog.jp/git/BCP_STORAGE/gpui-component.git
+- ibisOffice consumes this fork as the `forks/gpui-component` Git submodule and a Cargo crates.io patch.
 
 ## Modifications by ibis inc. (2026-10-26)
 

@@ -1,3 +1,4 @@
+// Modified by ibis inc. (2026-10-28): report rendered input semantics to scoped form observers.
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -609,6 +610,11 @@ impl RenderOnce for Input {
         let content_type = self.content_type;
         let disabled = self.disabled;
         let is_multi_line = presentation.is_multi_line();
+        let composing=state.clone();
+        crate::form_controls::record(crate::form_controls::FormControl {
+            kind:if is_multi_line {crate::form_controls::ControlKind::Multiline}else{crate::form_controls::ControlKind::Text},
+            focus:Some(presentation.focus_handle().clone()),disabled:self.disabled || presentation.is_disabled(),open:false,composing:Some(std::rc::Rc::new(move|w,cx|composing.has_marked_text(w,cx))),
+        });
         let accessibility_role = accessibility_role(is_multi_line, content_type, self.role);
         let accessibility_state = state.clone();
         // Tests read the same accessibility value as assistive technology.

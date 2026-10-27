@@ -1,3 +1,4 @@
+// Modified by ibis inc. (2026-10-28): report enabled controls to scoped form observers.
 use std::rc::Rc;
 
 use crate::ThemeStyled as _;
@@ -163,6 +164,7 @@ impl ParentElement for Radio {
 
 impl RenderOnce for Radio {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        crate::form_controls::other(self.disabled,false);
         let checked = self.checked;
         let has_content = self.label.is_some() || !self.children.is_empty();
         let indicator_size = rems(match self.size {

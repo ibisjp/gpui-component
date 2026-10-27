@@ -1,3 +1,4 @@
+// Modified by ibis inc. (2026-10-28): expose disabled semantics for compound form controls.
 use std::rc::Rc;
 
 use crate::ThemeStyled as _;
@@ -296,7 +297,7 @@ impl Button {
         self.size
     }
 
-    pub(crate) fn is_disabled(&self) -> bool {
+    pub fn is_disabled(&self) -> bool {
         self.disabled
     }
 

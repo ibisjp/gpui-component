@@ -1,9 +1,11 @@
+// Modified by ibis inc. (2026-10-28): expose rendered form-control observations.
 use gpui::App;
 use std::ops::Deref;
 
 mod component_traits;
 mod element_ext;
 pub mod global_state;
+pub mod form_controls;
 mod icon;
 mod index_path;
 #[cfg(any(feature = "inspector", debug_assertions))]

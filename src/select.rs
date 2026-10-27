@@ -1,3 +1,4 @@
+// Modified by ibis inc. (2026-10-28): report enabled/open selectors to scoped form observers.
 use gpui::{
     AnyElement, App, ClickEvent, Context, DismissEvent, Edges, ElementId, Entity, EventEmitter,
     FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, Length, ParentElement, Render,
@@ -802,6 +803,7 @@ where
 {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let disabled = self.options.disabled;
+        crate::form_controls::other(disabled,self.state.read(cx).state.open);
         let accessibility_label = self.options.accessibility_label.clone();
         let focus_handle = self.state.read(cx).state.focus_handle.clone();
         let empty = self.empty;

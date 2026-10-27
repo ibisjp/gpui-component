@@ -1,3 +1,4 @@
+// Modified by ibis inc. (2026-10-28): allow form submission to defer to active IME composition.
 use gpui::{App, Entity, FocusHandle, Focusable as _, SharedString, Window};
 use gpui_base::OtpState;
 use ropey::Rope;
@@ -52,6 +53,11 @@ macro_rules! dispatch {
 }
 
 impl TextInputState {
+    pub(crate) fn has_marked_text(&self,window:&mut Window,cx:&mut App)->bool {
+        use gpui::EntityInputHandler as _;
+        dispatch!(self,|state|state.update(cx,|s,cx|s.marked_text_range(window,cx).is_some()))
+    }
+
     pub(crate) fn entity_id(&self) -> gpui::EntityId {
         dispatch!(self, |state| state.entity_id())
     }

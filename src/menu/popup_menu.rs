@@ -1,3 +1,4 @@
+// Modified by ibis inc. (2026-10-28): allow interactive palette sections without row hover backgrounds.
 // Modified by ibis inc. (2026-10-26): measure child menus, avoid parent overlap, and require explicit opening when neither side fits.
 use crate::ThemeStyled as _;
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
@@ -53,6 +54,7 @@ pub enum PopupMenuItem {
     },
     /// A menu item with custom element render.
     ElementItem {
+        hoverable: bool,
         icon: Option<Icon>,
         disabled: bool,
         checked: bool,
@@ -93,6 +95,7 @@ impl PopupMenuItem {
         E: IntoElement,
     {
         PopupMenuItem::ElementItem {
+            hoverable: true,
             icon: None,
             disabled: false,
             checked: false,
@@ -100,6 +103,12 @@ impl PopupMenuItem {
             render: Box::new(move |window, cx| builder(window, cx).into_any_element()),
             handler: None,
         }
+    }
+
+    /// Disable the row hover background while preserving custom child controls.
+    pub fn hoverable(mut self, value: bool) -> Self {
+        if let Self::ElementItem { hoverable, .. } = &mut self { *hoverable = value; }
+        self
     }
 
     /// Create a new submenu item that opens another popup menu.
@@ -1260,7 +1269,7 @@ impl PopupMenu {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> MenuItemElement {
-        let has_left_icon = options.has_left_icon;
+        let has_left_icon = options.has_left_icon && !matches!(item, PopupMenuItem::ElementItem { hoverable: false, .. });
         let is_left_check = options.check_side.is_left() && item.is_checked();
         let right_check_icon = if options.check_side.is_right() && item.is_checked() {
             Some(Icon::new(IconName::Check).xsmall())
@@ -1288,6 +1297,7 @@ impl PopupMenu {
             .rounded(radius)
             .items_center()
             .selected(selected)
+            .hoverable(!matches!(item, PopupMenuItem::ElementItem { hoverable: false, .. }))
             .on_hover(cx.listener(move |this, hovered, _, cx| {
                 if *hovered {
                     if this.selected_index != Some(ix) {

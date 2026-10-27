@@ -1,3 +1,4 @@
+// Modified by ibis inc. (2026-10-28): separate row hover painting from click handling.
 use crate::{ActiveTheme, Disableable, StyledExt, h_flex};
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, MouseButton,
@@ -15,6 +16,7 @@ pub(crate) struct MenuItemElement {
     style: StyleRefinement,
     disabled: bool,
     selected: bool,
+    hoverable: bool,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
     children: SmallVec<[AnyElement; 2]>,
@@ -31,11 +33,14 @@ impl MenuItemElement {
             style: StyleRefinement::default(),
             disabled: false,
             selected: false,
+            hoverable: true,
             on_click: None,
             on_hover: None,
             children: SmallVec::new(),
         }
     }
+
+    pub(crate) fn hoverable(mut self, value: bool) -> Self { self.hoverable = value; self }
 
     /// Set ListItem as the selected item style.
     pub(crate) fn selected(mut self, selected: bool) -> Self {
@@ -112,7 +117,7 @@ impl RenderOnce for MenuItemElement {
             .when_some(self.on_hover, |this, on_hover| {
                 this.on_hover(move |hovered, window, cx| (on_hover)(hovered, window, cx))
             })
-            .when(!self.disabled, |this| {
+            .when(!self.disabled && self.hoverable, |this| {
                 this.group_hover(self.group_name, |this| {
                     this.bg(cx.theme().tokens.accent)
                         .text_color(cx.theme().accent_foreground)
@@ -121,13 +126,13 @@ impl RenderOnce for MenuItemElement {
                     this.bg(cx.theme().tokens.accent)
                         .text_color(cx.theme().accent_foreground)
                 })
-                .when_some(self.on_click, |this, on_click| {
+            })
+            .when(!self.disabled, |this| this.when_some(self.on_click, |this, on_click| {
                     this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cx.stop_propagation();
                     })
                     .on_click(on_click)
-                })
-            })
+                }))
             .when(self.disabled, |this| {
                 this.text_color(cx.theme().muted_foreground)
             })

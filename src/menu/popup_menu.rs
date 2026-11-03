@@ -1,3 +1,4 @@
+// Modified by ibis inc. (2026-11-03): PopupMenuItem::element_with_selection tells an element item whether it is selected.
 // Modified by ibis inc. (2026-10-28): allow interactive palette sections without row hover backgrounds.
 // Modified by ibis inc. (2026-10-26): measure child menus, avoid parent overlap, and require explicit opening when neither side fits.
 use crate::ThemeStyled as _;
@@ -59,8 +60,12 @@ pub enum PopupMenuItem {
         disabled: bool,
         checked: bool,
         action: Option<Box<dyn Action>>,
-        render: Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>,
+        /// Draws the item; the first argument is whether the item is the selected one (keyboard or pointer).
+        render: Box<dyn Fn(bool, &mut Window, &mut App) -> AnyElement + 'static>,
         handler: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+        /// Called first with `true` for the right arrow and `false` for the left one while the item is selected;
+        /// returns whether it took the key (a row of several choices moves between them).
+        on_horizontal_key: Option<Rc<dyn Fn(bool, &mut Window, &mut App) -> bool>>,
     },
     /// A submenu item that opens another popup menu.
     Submenu {
@@ -100,9 +105,42 @@ impl PopupMenuItem {
             disabled: false,
             checked: false,
             action: None,
-            render: Box::new(move |window, cx| builder(window, cx).into_any_element()),
+            render: Box::new(move |_, window, cx| builder(window, cx).into_any_element()),
             handler: None,
+            on_horizontal_key: None,
         }
+    }
+
+    /// Create a new menu item with custom element render that is told whether the item is the selected one
+    /// (modified by ibis inc., 2026-11-03: a row of several choices draws the one the arrow keys are on).
+    #[inline]
+    pub fn element_with_selection<F, E>(builder: F) -> Self
+    where
+        F: Fn(bool, &mut Window, &mut App) -> E + 'static,
+        E: IntoElement,
+    {
+        PopupMenuItem::ElementItem {
+            hoverable: true,
+            icon: None,
+            disabled: false,
+            checked: false,
+            action: None,
+            render: Box::new(move |selected, window, cx| builder(selected, window, cx).into_any_element()),
+            handler: None,
+            on_horizontal_key: None,
+        }
+    }
+
+    /// Let an element item take the left and right arrow keys while it is selected (modified by ibis inc.,
+    /// 2026-11-03). The handler gets `true` for the right arrow; returning `false` leaves the key to the menu.
+    pub fn on_horizontal_key<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(bool, &mut Window, &mut App) -> bool + 'static,
+    {
+        if let Self::ElementItem { on_horizontal_key, .. } = &mut self {
+            *on_horizontal_key = Some(Rc::new(handler));
+        }
+        self
     }
 
     /// Disable the row hover background while preserving custom child controls.
@@ -984,7 +1022,24 @@ impl PopupMenu {
         self.set_selected_index(0, cx);
     }
 
+    /// The selected element item takes a left or right arrow key (see `on_horizontal_key`).
+    fn horizontal_key_taken(&mut self, right: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let handler = match self.selected_index.and_then(|ix| self.menu_items.get(ix)) {
+            Some(PopupMenuItem::ElementItem { on_horizontal_key: Some(handler), .. }) => handler.clone(),
+            _ => return false,
+        };
+        if handler(right, window, cx) {
+            cx.stop_propagation();
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
     fn select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
+        if self.horizontal_key_taken(false, window, cx) {
+            return;
+        }
         let handled = if matches!(self.submenu_anchor.0, Anchor::TopLeft | Anchor::BottomLeft) {
             self._unselect_submenu(window, cx)
         } else {
@@ -1006,6 +1061,9 @@ impl PopupMenu {
     }
 
     fn select_right(&mut self, _: &SelectRight, window: &mut Window, cx: &mut Context<Self>) {
+        if self.horizontal_key_taken(true, window, cx) {
+            return;
+        }
         let handled = if matches!(self.submenu_anchor.0, Anchor::TopLeft | Anchor::BottomLeft) {
             self._select_submenu(window, cx)
         } else {
@@ -1362,7 +1420,7 @@ impl PopupMenu {
                             window,
                             cx,
                         ))
-                        .child((render)(window, cx))
+                        .child((render)(selected, window, cx))
                         .children(right_check_icon.map(|icon| icon.ml_3())),
                 ),
             PopupMenuItem::Item {

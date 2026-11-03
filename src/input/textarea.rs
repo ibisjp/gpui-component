@@ -7,7 +7,7 @@ use gpui::{
 
 use super::{Input, TextareaState};
 use crate::native_menu::NativeMenu;
-use crate::{RoleOverride, StyledExt as _};
+use crate::{RoleOverride, Sizable, Size, StyledExt as _};
 
 /// A styled ordinary multi-line text field.
 #[derive(IntoElement)]
@@ -19,6 +19,9 @@ pub struct Textarea {
     bordered: bool,
     disabled: bool,
     readonly: bool,
+    cleanable: bool,
+    suffix: Option<gpui::AnyElement>,
+    size: Size,
     tab_index: isize,
     role: RoleOverride,
     accessibility_id: Option<SharedString>,
@@ -42,6 +45,9 @@ impl Textarea {
             bordered: true,
             disabled: false,
             readonly: false,
+            cleanable: false,
+            suffix: None,
+            size: Size::default(),
             tab_index: 0,
             role: RoleOverride::default(),
             accessibility_id: None,
@@ -78,6 +84,20 @@ impl Textarea {
     /// made by the user.
     pub fn readonly(mut self, readonly: bool) -> Self {
         self.readonly = readonly;
+        self
+    }
+
+    /// Show the clear button (a cross inside the field) while the text is not empty.
+    /// (ibisOffice modification, 2026-11-03: the comment field of the right pane.)
+    pub fn cleanable(mut self, cleanable: bool) -> Self {
+        self.cleanable = cleanable;
+        self
+    }
+
+    /// An element at the trailing edge inside the field.
+    /// (ibisOffice modification, 2026-11-03.)
+    pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
+        self.suffix = Some(suffix.into_any_element());
         self
     }
 
@@ -129,6 +149,13 @@ impl Textarea {
     }
 }
 
+impl Sizable for Textarea {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
+        self
+    }
+}
+
 impl Styled for Textarea {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
@@ -144,6 +171,9 @@ impl Textarea {
             .bordered(self.bordered)
             .disabled(self.disabled)
             .readonly(self.readonly)
+            .cleanable(self.cleanable)
+            .with_size(self.size)
+            .when_some(self.suffix, |this, suffix| this.suffix(suffix))
             .tab_index(self.tab_index)
             .role(self.role)
             .when_some(self.height, |this, height| this.h(height))

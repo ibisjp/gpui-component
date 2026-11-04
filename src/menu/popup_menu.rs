@@ -1,3 +1,4 @@
+// Modified by ibis inc. (2026-11-04): a press outside that closes the menu is reported to popup_guard.
 // Modified by ibis inc. (2026-11-03): PopupMenuItem::element_with_selection tells an element item whether it is selected.
 // Modified by ibis inc. (2026-10-28): allow interactive palette sections without row hover backgrounds.
 // Modified by ibis inc. (2026-10-26): measure child menus, avoid parent overlap, and require explicit opening when neither side fits.
@@ -1201,6 +1202,7 @@ impl PopupMenu {
             return;
         }
 
+        crate::popup_guard::note_outside_dismiss();
         self.dismiss(&Cancel, window, cx);
     }
 

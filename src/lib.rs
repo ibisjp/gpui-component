@@ -63,6 +63,7 @@ pub mod notification;
 pub mod pagination;
 pub mod plot;
 pub mod popover;
+pub mod popup_guard;
 pub mod progress;
 pub mod radio;
 pub mod rating;

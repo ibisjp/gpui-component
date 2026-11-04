@@ -20,3 +20,7 @@ This is an independent fork of the published `gpui-component` 0.6.6 crate. Its s
 - Add pure geometry tests and an activation-state regression test.
 
 The modified source files carry an ibis modification notice. Original author copyrights remain with their respective owners.
+
+## Modifications by ibis inc. (2026-11-04)
+
+- `popup_guard`: the press that closes a popup (a menu, a dropdown list, a context menu) is not delivered to the element under the pointer. `PopupMenu` reports a press outside that closes it; the window's root and a catcher painted after every popup decide (see the module's comment).
